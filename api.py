@@ -1,3 +1,4 @@
+import time
 import requests
 import config as cfg
 import datetime
@@ -5,7 +6,7 @@ from collections import OrderedDict
 import json
 
 def save(inp): # debug save
-    with open("test.json", "w") as f:
+    with open("test.json", "w", encoding="utf-8") as f:
         f.write(inp)
 
 def getDefaultTopTracks(user=cfg.lastFmUser, timePeriod="1month"): # get top tracks of a user based on last.fm's charts
@@ -14,9 +15,9 @@ def getDefaultTopTracks(user=cfg.lastFmUser, timePeriod="1month"): # get top tra
     save(r.text)
 
 def getTopTracks(start, end, user=cfg.lastFmUser):
-    # convert start and end to unix timestamps
-    start = int(start.timestamp())
-    end = int(end.timestamp())
+    # convert start and end to unix timestamps (NOT NEEDED ANYMORE)
+    # start = int(start.timestamp())
+    # end = int(end.timestamp())
     print(start, end)
     url = f"http://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks&user={user}&from={start}&to={end}&api_key={cfg.lfmkey}&format=json"
     r = requests.get(url).json()
@@ -30,11 +31,14 @@ def getTopTracks(start, end, user=cfg.lastFmUser):
     except KeyError:
         pass
 
+    # save(str(r["recenttracks"]["track"]))
     if int(r["recenttracks"]["@attr"]["totalPages"]) <= 1: # if only one page of tracks
         return r["recenttracks"]["track"]
     else: # if more than one page of tracks
+        print("More than one page of tracks")
         tracks = []
         for page in range(1, int(r["recenttracks"]["@attr"]["totalPages"])+1):
+            print(f"Getting page {page} of {r['recenttracks']['@attr']['totalPages']}...")
             url = f"http://ws.audioscrobbler.com/2.0/?method=user.getrecenttracks&user={user}&from={start}&to={end}&api_key={cfg.lfmkey}&format=json&page={page}"
             r = requests.get(url).json()
 
@@ -71,7 +75,7 @@ def spAuth():
             "client_id": cfg.spId,
             "response_type": "code",
             "redirect_uri": "http://localhost:8888/callback",
-            "scope": "user-read-private user-read-email playlist-modify-public playlist-modify-private"
+            "scope": "user-read-private user-read-email playlist-modify-public playlist-modify-private user-library-read user-library-modify",
         }
         r = requests.get(url, params=params)
         print(f"Please go to this URL: \n{r.url}.")
@@ -104,13 +108,30 @@ def spAuth():
 
 
 
-def spGetTrack(auth, track, artist, album):
+def spGetTrack(auth, track, artist):
     url = f"https://api.spotify.com/v1/search?q=track:{track}%20artist:{artist}&type=track&limit=1"
     r = requests.get(url, headers={"Authorization": f"Bearer {auth['token']}"}).json()
     try:
-        return r["tracks"]["items"][0]["uri"]
+        # schema: {uri, name, artist}
+        return [r["tracks"]["items"][0]["uri"], r["tracks"]["items"][0]["name"], r["tracks"]["items"][0]["artists"][0]["name"]]
     except IndexError:
-        return r
+        return None
+
+def spGetLibraryTracks(auth):
+    # get all tracks in library using pagination
+    url = f"https://api.spotify.com/v1/me/tracks?limit=50"
+    r = requests.get(url, headers={"Authorization": f"Bearer {auth['token']}"})
+    print("got first page")
+    tracks = r.json()["items"]
+    i = 1
+    while r.json()["next"] is not None:
+        time.sleep(0.5)
+        r = requests.get(r.json()["next"], headers={"Authorization": f"Bearer {auth['token']}"})
+        tracks += r.json()["items"]
+        i += 1
+        print(f"got page {i} out of {r.json()['total']/50}")
+    return tracks
+
 
 def spCreatePlaylist(auth, data): 
     url = f"https://api.spotify.com/v1/users/{auth['userid']}/playlists"
@@ -131,30 +152,10 @@ def spAddToPlaylist(auth, playlistID, tracks):
     return r
 #save(str(getTopTracks(start=datetime.datetime(2021, 2, 1), end=datetime.datetime(2021, 2, 28))))
 
-out = compileTracks(getTopTracks(start=datetime.datetime(2022, 2, 1), end=datetime.datetime(2022, 2, 28)))
 
-auth = spAuth()
+#out = compileTracks(getTopTracks(start=datetime.datetime(2022, 2, 1), end=datetime.datetime(2022, 2, 28)))
 
-playlist = []
+if __name__ == "__main__":
+    auth = spAuth()
 
-# get top 10 tracks
-for i, track in enumerate(out):
-    if i == 10:
-        break
-    print(f"Getting {track}...")
-    
-    rawTrack = spGetTrack(auth, track, out[track]["artist"], out[track]["album"])
-    print(rawTrack)
-    playlist.append(rawTrack)
-
-print(playlist)
-
-playlistData = []
-playlistData.append(input("Playlist Name: "))
-if "y" in input("Public?").lower():
-    playlistData.append("true")
-else:
-    playlistData.append("false")
-
-playlistID = spCreatePlaylist(auth, playlistData)
-print(spAddToPlaylist(auth, playlistID, playlist))
+    save(str(spGetLibraryTracks(auth)))
